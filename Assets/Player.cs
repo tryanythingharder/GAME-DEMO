@@ -6,146 +6,137 @@ public class Player : MonoBehaviour
     [Header("Components")]
     public Rigidbody2D rb;
     public Animator anim;
+    public PlayerInput playerInput;
+    public CapsuleCollider2D playerCollider;
 
     [Header("Movement Variables")]
-    public float walkSpeed = 4f;
+    public float walkSpeed = 5f;
     public float runSpeed = 8f;
-    public float jumpForce = 12f;
+    public float jumpForce = 20f;
     public float jumpCutMultiplier = 0.5f;
-    public float normalGravity = 3f;
-    public float fallGravity = 5f;
-    public float jumpGravity = 2f;
+    public float normalGravity = 6f;
+    public float fallGravity = 9f;
+    public float jumpGravity = 4f;
 
     [Header("Jump Settings")]
     public int maxJumps = 2;
-    private int jumpCount;
-    private bool jumpPressed;
-    private bool jumpReleased;
+    [HideInInspector] public int jumpCount;
+
+    [Header("Jump Buffer")]
+    public float jumpBufferTime = 0.15f;
+    private float jumpBufferCounter;
+
+    [Header("Coyote Time")]
+    public float coyoteTime = 0.12f;
+    private float coyoteCounter;
+
+    [HideInInspector] public bool jumpReleased;
 
     [Header("Ground Check")]
     public Transform groundCheck;
-    public float groundCheckRadius = 0.2f;
+    public float groundCheckRadius = 0.5f;
     public LayerMask groundLayer;
-    private bool isGrounded;
+    [HideInInspector] public bool isGrounded;
 
-    private Vector2 moveInput;
-    private bool runPressed;
-    private int facingDirection = 1;
+    [Header("Crouch Settings (Auto)")]
+    [HideInInspector] public float normalHeight;
+    [HideInInspector] public Vector2 normalOffset;
+
+    [HideInInspector] public float crouchHeight;
+    [HideInInspector] public Vector2 crouchOffset;
+
+    public Transform headCheck;
+    public float headCheckRadius = 0.12f;
+    [HideInInspector] public bool isCrouching;
+
+    [Header("Slide Settings (Auto)")]
+    public float slideDuration = 0.6f;
+    public float slideSpeed = 12f;
+    public float slideStopDuration = 0.15f;
+
+    [HideInInspector] public float slideHeight;
+    [HideInInspector] public Vector2 slideOffset;
+
+    [HideInInspector] public bool isSliding;
+
+    [Header("Input Values")]
+    [HideInInspector] public Vector2 moveInput;
+    [HideInInspector] public bool runPressed;
+    [HideInInspector] public int facingDirection = 1;
+
+    // FSM
+    public PlayerState currentState;
+    public PlayerIdleState idleState;
+    public PlayerWalkState walkState;
+    public PlayerRunState runState;
+    public PlayerJumpState jumpState;
+    public PlayerFallState fallState;
+    public PlayerSlideState slideState;
+    public PlayerCrouchState crouchState;
 
     private void Start()
     {
         rb.gravityScale = normalGravity;
         jumpCount = maxJumps;
+
+        // --------------------- 自动记录原始碰撞体 ---------------------
+        normalHeight = playerCollider.size.y;
+        normalOffset = playerCollider.offset;
+
+        // 自动生成下蹲尺寸 & 偏移
+        crouchHeight = normalHeight * 0.5f;
+        crouchOffset = new Vector2(
+            normalOffset.x,
+            normalOffset.y - (normalHeight - crouchHeight) / 2f
+        );
+
+        // 自动生成滑铲尺寸 & 偏移
+        slideHeight = normalHeight * 0.4f;
+        slideOffset = new Vector2(
+            normalOffset.x,
+            normalOffset.y - (normalHeight - slideHeight) / 2f
+        );
+        // -------------------------------------------------------------
+
+        idleState = new PlayerIdleState(this);
+        walkState = new PlayerWalkState(this);
+        runState = new PlayerRunState(this);
+        jumpState = new PlayerJumpState(this);
+        fallState = new PlayerFallState(this);
+        slideState = new PlayerSlideState(this);
+        crouchState = new PlayerCrouchState(this);
+
+        ChangeState(idleState);
     }
 
-    void Update()
+    private void Update()
     {
-        Flip();
+        if (jumpBufferCounter > 0)
+            jumpBufferCounter -= Time.deltaTime;
+
+        if (isGrounded)
+            coyoteCounter = coyoteTime;
+        else
+            coyoteCounter -= Time.deltaTime;
+
+        CheckGroundStatus();
+        currentState.Update();
+
         HandleAnimations();
-    }
-
-    void FixedUpdate()
-    {
-        CheckGrounded();
-        HandleMovement();
-        HandleJump();
+        Flip();
         ApplyVariableGravity();
     }
 
-    private void HandleMovement()
+    private void FixedUpdate()
     {
-        float speed = runPressed ? runSpeed : walkSpeed;
-        float targetSpeed = moveInput.x * speed;
-
-        rb.linearVelocity = new Vector2(targetSpeed, rb.linearVelocity.y);
+        currentState.FixedUpdate();
     }
 
-    private void HandleJump()
+    public void ChangeState(PlayerState newState)
     {
-        if (isGrounded && rb.linearVelocity.y <= 0.05f)
-        {
-            jumpCount = maxJumps;
-        }
-
-        if (jumpPressed && jumpCount > 0)
-        {
-            rb.linearVelocity = new Vector2(rb.linearVelocity.x, jumpForce);
-            jumpPressed = false;
-            jumpReleased = false;
-
-            jumpCount--;
-        }
-
-        if (jumpReleased && rb.linearVelocity.y > 0)
-        {
-            rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y * jumpCutMultiplier);
-            jumpReleased = false;
-        }
-    }
-
-    void ApplyVariableGravity()
-    {
-        if (rb.linearVelocity.y < -0.01f)
-            rb.gravityScale = fallGravity;
-        else if (rb.linearVelocity.y > 0.01f)
-            rb.gravityScale = jumpGravity;
-        else
-            rb.gravityScale = normalGravity;
-    }
-
-    void CheckGrounded()
-    {
-        isGrounded = Physics2D.OverlapCircle(
-            groundCheck.position,
-            groundCheckRadius,
-            groundLayer
-        );
-    }
-
-    void HandleAnimations()
-    {
-        bool isMoving = Mathf.Abs(moveInput.x) > 0.1f;
-
-        anim.SetBool("isGrounded", isGrounded);
-        anim.SetFloat("yVelocity", rb.linearVelocity.y);
-        anim.SetBool("isJumping", rb.linearVelocity.y > 0.1f);
-
-        if (!isGrounded)
-        {
-            anim.SetBool("isIdle", false);
-            anim.SetBool("isWalking", false);
-            anim.SetBool("isRunning", false);
-            return;
-        }
-
-        if (!isMoving)
-        {
-            anim.SetBool("isIdle", true);
-            anim.SetBool("isWalking", false);
-            anim.SetBool("isRunning", false);
-        }
-        else if (isMoving && !runPressed)
-        {
-            anim.SetBool("isIdle", false);
-            anim.SetBool("isWalking", true);
-            anim.SetBool("isRunning", false);
-        }
-        else if (isMoving && runPressed)
-        {
-            anim.SetBool("isIdle", false);
-            anim.SetBool("isWalking", false);
-            anim.SetBool("isRunning", true);
-        }
-    }
-
-    void Flip()
-    {
-        if (moveInput.x > 0.1f)
-            facingDirection = 1;
-        else if (moveInput.x < -0.1f)
-            facingDirection = -1;
-
-        transform.localScale = new Vector3(facingDirection, 1, 1);
+        currentState?.Exit();
+        currentState = newState;
+        currentState?.Enter();
     }
 
     public void OnMove(InputValue value)
@@ -162,18 +153,96 @@ public class Player : MonoBehaviour
     {
         if (value.isPressed)
         {
-            jumpPressed = true;
+            jumpBufferCounter = jumpBufferTime;
             jumpReleased = false;
         }
         else
-        {
             jumpReleased = true;
+    }
+
+    private void CheckGroundStatus()
+    {
+        isGrounded = Physics2D.OverlapCircle(
+            groundCheck.position,
+            groundCheckRadius,
+            groundLayer
+        );
+
+        if (isGrounded)
+            jumpCount = maxJumps;
+    }
+
+    public bool CanJump()
+    {
+        if (jumpBufferCounter > 0 && (coyoteCounter > 0 || jumpCount > 0))
+        {
+            jumpBufferCounter = 0;
+            return true;
         }
+        return false;
+    }
+
+    private void ApplyVariableGravity()
+    {
+        if (rb.linearVelocity.y < -0.1f)
+            rb.gravityScale = fallGravity;
+        else if (rb.linearVelocity.y > 0.1f)
+            rb.gravityScale = jumpGravity;
+        else
+            rb.gravityScale = normalGravity;
+    }
+
+    // ---------------- Collider 切换 ----------------
+    public void SetColliderCrouch()
+    {
+        playerCollider.size = new Vector2(playerCollider.size.x, crouchHeight);
+        playerCollider.offset = crouchOffset;
+    }
+
+    public void SetColliderSlide()
+    {
+        playerCollider.size = new Vector2(playerCollider.size.x, slideHeight);
+        playerCollider.offset = slideOffset;
+    }
+
+    public void SetColliderNormal()
+    {
+        playerCollider.size = new Vector2(playerCollider.size.x, normalHeight);
+        playerCollider.offset = normalOffset;
+    }
+    // -------------------------------------------------
+
+    private void Flip()
+    {
+        if (moveInput.x > 0.1f)
+            facingDirection = 1;
+        else if (moveInput.x < -0.1f)
+            facingDirection = -1;
+
+        transform.localScale = new Vector3(facingDirection, 1, 1);
+    }
+
+    private void HandleAnimations()
+    {
+        anim.SetBool("isGrounded", isGrounded);
+        anim.SetFloat("yVelocity", rb.linearVelocity.y);
+        anim.SetBool("isSliding", isSliding);
+        anim.SetBool("isCrouching", isCrouching);
+
+        anim.SetBool("isIdle", currentState is PlayerIdleState);
+        anim.SetBool("isWalking", currentState is PlayerWalkState);
+        anim.SetBool("isRunning", currentState is PlayerRunState);
+        anim.SetBool("isJumping", currentState is PlayerJumpState);
+        anim.SetBool("isFalling", currentState is PlayerFallState);
     }
 
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;
         Gizmos.DrawWireSphere(groundCheck.position, groundCheckRadius);
+
+        Gizmos.color = Color.blue;
+        if (headCheck != null)
+            Gizmos.DrawWireSphere(headCheck.position, headCheckRadius);
     }
 }
